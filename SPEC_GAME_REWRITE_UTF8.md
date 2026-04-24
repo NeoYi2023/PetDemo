@@ -211,6 +211,7 @@
 - 技术实现建议：将流程状态切换集中在单一驱动方法，避免多入口并发改状态。
 - 朝向约束（P0）：战斗演出阶段玩家角色必须面朝右侧、敌方面朝左侧；当 `HeroSpineLocomotion`（基于营地输入/速度）与战斗演出同时存在时，朝向仲裁优先级为 `FarmUnlockBattleFlowController > HeroSpineLocomotion`，防止角色在战斗中被营地朝向逻辑反写。
 - 朝向锁定实现建议（P0）：进入战斗时对玩家 `SkeletonAnimation.Skeleton.ScaleX` 执行正向锁定（`>0`），并临时禁用主角 `HeroSpineLocomotion`；流程结束后恢复原启用状态，避免营地 locomotion 在战斗演出帧内覆盖 Spine 朝向导致“背对敌人”。
+- 朝向符号约定（P0）：玩家“面朝右侧”不可写死为 `ScaleX > 0`，应读取 `HeroSpineLocomotion` 的朝向约定（是否 `invertHorizontalFacing`）动态计算“右向符号”；战斗演出锁定与恢复均使用该符号，避免资源朝向基准差异导致视觉反转。
 
 ### 10.19 DemoBattleActorView 与 SpineAttackPlayer 协同
 - 系统设计说明：`DemoBattleActorView` 负责演出层攻击/死亡播放，`SpineAttackPlayer` 负责轨道化攻击覆盖，二者约定轨道分工避免冲突。
@@ -1058,6 +1059,144 @@
   - P2：自动化安全测试接入。
 - 技术实现建议：
   - 每次高风险改动至少补充一条安全回归用例并绑定发布检查项。
+
+### 10.73 配置热更新边界规范
+- 系统设计说明：运行中允许热更新的配置仅限无状态或可安全重载项，状态机核心参数需在安全窗口更新。
+- 数据结构定义：
+  - `HotReloadPolicy`
+    - `configId: string`
+    - `reloadMode: string`
+    - `requiresSafePoint: bool`
+    - `rollbackSupported: bool`
+- 接口/API 设计：
+  - 配置拉取入口、热更新应用入口、安全窗口判定入口。
+- 实现优先级：
+  - P0：热更新不破坏主循环。
+  - P1：失败可回滚。
+  - P2：灰度热更新。
+- 技术实现建议：
+  - 战斗进行中禁止更新结算核心参数，延迟到流程结束后应用。
+
+### 10.74 功能开关治理规范
+- 系统设计说明：功能开关统一由配置中心管理，避免散落硬编码导致行为不可控。
+- 数据结构定义：
+  - `FeatureToggle`
+    - `featureId: string`
+    - `enabled: bool`
+    - `owner: string`
+    - `expireAt: string`
+- 接口/API 设计：
+  - 开关读取入口、默认值回退入口、开关变更通知入口。
+- 实现优先级：
+  - P0：关键开关可即时生效。
+  - P1：开关状态可追踪。
+  - P2：自动过期清理。
+- 技术实现建议：
+  - 每个临时开关必须设置过期时间与责任人，防止永久遗留。
+
+### 10.75 运营活动参数安全边界
+- 系统设计说明：活动参数（掉率、奖励、门槛）需受上下限约束，防止误配置破坏经济和进度平衡。
+- 数据结构定义：
+  - `EventParamGuard`
+    - `paramKey: string`
+    - `minValue: float`
+    - `maxValue: float`
+    - `currentValue: float`
+    - `isValid: bool`
+- 接口/API 设计：
+  - 参数校验入口、越界拒绝入口、默认回退入口。
+- 实现优先级：
+  - P0：越界参数不可生效。
+  - P1：异常参数可告警。
+  - P2：参数模拟预演。
+- 技术实现建议：
+  - 活动参数上线前执行离线校验与小流量验证，禁止直接全量生效。
+
+### 10.76 应急开关与止损策略
+- 系统设计说明：针对高风险链路（存档、战斗、解锁）预置应急开关，异常时可快速止损。
+- 数据结构定义：
+  - `EmergencySwitch`
+    - `switchId: string`
+    - `scope: string`
+    - `state: string`
+    - `triggerThreshold: string`
+- 接口/API 设计：
+  - 应急开关启用入口、自动触发入口、恢复入口。
+- 实现优先级：
+  - P0：故障时可立即止损。
+  - P1：触发条件可配置。
+  - P2：自动恢复策略。
+- 技术实现建议：
+  - 止损开关触发后强制记录事件并通知责任人，避免静默降级。
+
+### 10.77 运营配置版本化规范
+- 系统设计说明：运营配置采用显式版本号管理，保证回溯、对比、回滚和审计能力。
+- 数据结构定义：
+  - `OpsConfigVersion`
+    - `version: string`
+    - `publishedAt: string`
+    - `changedKeys: string[]`
+    - `compatibleClientRange: string`
+- 接口/API 设计：
+  - 版本发布入口、版本对比入口、版本回滚入口。
+- 实现优先级：
+  - P0：版本一致性可校验。
+  - P1：版本差异可追踪。
+  - P2：自动兼容建议。
+- 技术实现建议：
+  - 客户端加载配置前先校验兼容区间，不兼容时回退稳定版本。
+
+### 10.78 运维变更审批与双人复核规范
+- 系统设计说明：高风险运维操作（开关全量、活动参数改写、应急止损）需双人复核后执行。
+- 数据结构定义：
+  - `OpsApprovalRecord`
+    - `changeId: string`
+    - `requester: string`
+    - `reviewer: string`
+    - `approved: bool`
+    - `reason: string`
+- 接口/API 设计：
+  - 变更申请入口、复核入口、执行锁定入口。
+- 实现优先级：
+  - P0：高风险操作必须审批。
+  - P1：审批记录可审计。
+  - P2：审批自动化流转。
+- 技术实现建议：
+  - 未完成复核的变更禁止进入执行链路。
+
+### 10.79 运维告警分组与值班规范
+- 系统设计说明：告警按模块与严重度分组，绑定值班职责和升级链路，降低误报与漏报风险。
+- 数据结构定义：
+  - `AlertRoutingPolicy`
+    - `module: string`
+    - `severity: string`
+    - `onCallGroup: string`
+    - `escalationMin: int`
+- 接口/API 设计：
+  - 告警路由入口、值班查询入口、升级通知入口。
+- 实现优先级：
+  - P0：高严重度告警必达。
+  - P1：升级链路可靠。
+  - P2：静默窗口管理。
+- 技术实现建议：
+  - 告警规则应与故障分级（10.61）保持一致，避免口径冲突。
+
+### 10.80 可运营能力回归规范
+- 系统设计说明：每次版本发布需回归“热更新、开关、活动参数、应急止损”四类可运营能力，确保线上可控。
+- 数据结构定义：
+  - `OpsRegressionCase`
+    - `caseId: string`
+    - `capability: string`
+    - `expectedResult: string`
+    - `actualResult: string`
+- 接口/API 设计：
+  - 回归执行入口、结果归档入口、阻断发布入口。
+- 实现优先级：
+  - P0：关键可运营能力可用。
+  - P1：回归证据完备。
+  - P2：自动化回归接入。
+- 技术实现建议：
+  - 可运营回归失败时，发布流程必须阻断并触发修复流程。
 
 ---
 
