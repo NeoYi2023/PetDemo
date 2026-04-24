@@ -1,0 +1,47 @@
+- System design:
+  - `BindSaveData` 在重建或同步 `_sceneFields` 与 `_runtimes` 时，若子路径再次写入同一 `Dictionary`，可能在 `foreach` 枚举期间触发「集合已修改」异常。
+  - 典型场景：绑定存档过程中注册或反注册 `FarmFieldComponent`，在遍历 `_sceneFields` 的同时修改了 `_sceneFields`（或其它正在被遍历的 `Dictionary`）。
+  - 设计原则：`ReRegister...` 内不得边遍历边修改同一集合；应先快照再批量应用，或迭代副本，并统一入口避免重入。
+- Data structure definition:
+  - `SceneFieldRebindSnapshot`
+    - `int sceneFieldCount`
+    - `int runtimeCount`
+    - `string[] sceneFieldKeys`
+    - `string bindRunId`
+  - `SceneFieldMutationTrace`
+    - `string fieldId`
+    - `bool existedBeforeSet`
+    - `int countBeforeSet`
+    - `int countAfterSet`
+    - `string trigger` (`BindSaveData` / `OnEnable` / `OnDisable` / `Other`)
+- API/interface design:
+  - 不新增对外 API；约束在内部实现。
+  - `ReRegisterSceneFieldsToCurrentRuntimeList` 仅允许在稳定快照上对齐 key/value，禁止在枚举 `Dictionary` 时写入同一实例。
+- Priority and dependency:
+  - Priority: P0（运行时崩溃，阻塞体验）。
+  - Dependency: `FarmManager.BindSaveData`、`FarmManager.RegisterSceneField`、`FarmFieldComponent` 生命周期与重入顺序。
+- Implementation suggestion:
+  - 将「收集场景字段、与存档对齐、写回 runtime」拆成不可重入阶段，必要时对 key 排序后处理。
+  - 注册路径区分「场景绑定」与「纯运行时注册」，避免在 `BindSaveData` 中途触发二次全量重注册。
+  - 增加一次性诊断日志（fieldId、前后数量、触发源）；post-fix 可降为 Debug。
+
+### B.6 Hotfix Notes (v1.36)
+
+- Date: 2026-04-23
+- Scope: runtime exception `InvalidOperationException: Collection was modified; enumeration operation may not execute` in `GatherManager.ReRegisterScenePointsToCurrentRuntimeList`，与 B.5 为同一类问题。
+- System design:
+  - `GatherManager` 与 `FarmManager` 对称：场景点字典加运行时列表；`BindSaveData` 路径可能在中途修改 `_scenePoints` 与 `_runtimes`。
+  - 禁止在遍历 `_scenePoints` 的同时向 `_scenePoints` 增删。
+  - 沿用 B.5：`RegisterScenePoint`（场景加存档）与 `RegisterScenePointRuntimeOnly`（仅运行时）在 `ReRegister...` 中的调用须避免在枚举中写入。
+- Data structure definition:
+  - 与 B.5 类似，可将 `SceneFieldMutationTrace` 泛化为「场景实体变更追踪」，字段名改为 `pointId` 亦可。
+- API/interface design:
+  - 不新增对外 API；必要时强化 `RegisterScenePointRuntimeOnly` 的语义与调用点注释。
+- Priority and dependency:
+  - Priority: P0（与 Farm 侧同类，Gather 侧也需修复）。
+  - Dependency: `GatherManager.BindSaveData`、`GatherManager.RegisterScenePoint`、`GatherPointComponent` 生命周期。
+- Implementation suggestion:
+  - 参考 `debug-08db5e.log` 中 `HG1/HG2/HG3` 等点位的注册顺序，核对 `_scenePoints` 是否在枚举中被修改。
+  - 确保 `ReRegister...` 内不向字典误写；应使用 `RegisterScenePointRuntimeOnly` 的场景须与全量重绑分离。
+  - 增加一次性诊断日志；post-fix 可收敛或移除冗余日志。
+
