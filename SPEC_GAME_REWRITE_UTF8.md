@@ -14,6 +14,14 @@
 - 已结构化重写：2.2~9 主体章节。
 - 待后续问题排查：历史版本记录中的个别术语和英文混排统一。
 
+# 宠物 Demo 游戏 SPEC（重写版）
+## 1. 文档信息
+- 文档名称：宠物 Demo 游戏 SPEC
+- 工程路径：`Pet Demo`
+- 目标平台：Unity 2D（PC 优先，预留移动端输入）
+- 当前目标：营地循环、PVE 回合战斗、PVP 接口预留
+- 文档基准：以当前代码实现为准，文档与代码不一致时先修正文档
+
 ## 2.2~9 结构化重写（按代码事实）
 
 ### 2.2 输入系统
@@ -204,14 +212,18 @@
 - 技术实现建议：中心点解析失败要有确定回退，不可出现 NaN 或屏外异常采样。
 
 ### 10.18 FarmUnlockBattleFlowController 状态机
-- 系统设计说明：解锁战流程由 `FarmUnlockBattleFlowController` 驱动，包含对话、开战、结算、失败回落与场景恢复。
-- 数据结构定义：`FlowState`、玩家/敌方血量显示比、结算目标值、脚本敌方绑定。
-- 接口/API 设计：`TryOpenDialog`、`TryStartBattleWithoutDialog`、状态 Tick 与结果回调接口。
-- 实现优先级：P0 流程闭环可恢复；P1 演出与结算同步；P2 正式战斗核心接管。
+- 系统设计说明：解锁战流程由 `FarmUnlockBattleFlowController` 驱动，包含对话、冒险剧情、开战、结算、失败回落与场景恢复。新游戏入口必须先展示“冒险剧情”，再由玩家点击按钮进入原本的脚本开局战斗。
+- 数据结构定义：`FlowState`、玩家/敌方血量显示比、结算目标值、脚本敌方绑定、冒险剧情文案与主角循环动作名。
+- 接口/API 设计：`TryOpenDialog`、`TryStartBattleWithoutDialog`、`TryStartScriptedIntroBattle`、状态 Tick 与结果回调接口。`TryStartScriptedIntroBattle` 在新游戏开局时先进入冒险剧情状态，按钮确认后复用原战斗入口继续脚本战斗。
+- 实现优先级：P0 新游戏冒险剧情必须稳定出现在开局战斗前；P0 流程闭环可恢复；P1 演出与结算同步；P2 正式战斗核心接管。
 - 技术实现建议：将流程状态切换集中在单一驱动方法，避免多入口并发改状态。
-- 朝向约束（P0）：战斗演出阶段玩家角色必须面朝右侧、敌方面朝左侧；当 `HeroSpineLocomotion`（基于营地输入/速度）与战斗演出同时存在时，朝向仲裁优先级为 `FarmUnlockBattleFlowController > HeroSpineLocomotion`，防止角色在战斗中被营地朝向逻辑反写。
-- 朝向锁定实现建议（P0）：进入战斗时对玩家 `SkeletonAnimation.Skeleton.ScaleX` 执行正向锁定（`>0`），并临时禁用主角 `HeroSpineLocomotion`；流程结束后恢复原启用状态，避免营地 locomotion 在战斗演出帧内覆盖 Spine 朝向导致“背对敌人”。
-- 朝向符号约定（P0）：玩家“面朝右侧”不可写死为 `ScaleX > 0`，应读取 `HeroSpineLocomotion` 的朝向约定（是否 `invertHorizontalFacing`）动态计算“右向符号”；战斗演出锁定与恢复均使用该符号，避免资源朝向基准差异导致视觉反转。
+- 冒险剧情演出规则（P0）：主角在屏幕中上部居中显示，垂直位置与战斗角色 `ActorViewportY` 一致，按战斗覆盖层倍率放大，禁用主角 locomotion 朝向写入，并在 Spine track 0 循环播放 `exclusive_2`；缺少该动画时静默保持当前动作，不阻断流程。
+- 冒险剧情 UI 规则（P0）：主角下方显示文本“你即将面对恶魔，只有消灭恶魔你才能跳出无尽的循环！”，文本下方显示按钮“开始吧！”。点击按钮后不立即进入战斗，而是先让主角在原地循环播放 `move_1` 1 秒；过渡期间按钮保持按下/变暗状态且不可重复点击，1 秒后剧情 UI 消失并进入原本开局脚本战斗，敌方、固定失败、后续失败剧情与“前往”逻辑保持不变。
+- 朝向约束（P0）：战斗演出阶段玩家控制的英雄必须面朝右侧，敌方怪物必须面朝左侧；当 `HeroSpineLocomotion`（基于营地输入/速度）与战斗演出同时存在时，朝向仲裁优先级为 `FarmUnlockBattleFlowController > HeroSpineLocomotion`，防止角色在战斗中被营地朝向逻辑反写。
+- 朝向锁定实现建议（P0）：进入战斗时临时禁用主角 `HeroSpineLocomotion`，并由战斗演出层接管根节点 `transform.localScale.x`；流程结束后恢复原启用状态与原始变换，避免营地 locomotion 在战斗演出帧内覆盖 Spine 朝向导致“背对敌人”。
+- 运行时诊断建议（P1）：当“代码朝向值与视觉朝向不一致”时，战斗层应输出主角下多 `SkeletonAnimation` 节点的路径与 `skeleton/local/lossy` 缩放快照，优先排查“锁定了非可见 Skeleton 节点”的问题。
+- 战斗演出符号修正规则（P0）：敌我朝向符号不可“一刀切”整体翻转，需按角色分别解析：`Role_cunmin` 初始朝左且 `HeroSpineLocomotion.invertHorizontalFacing=true`，所以主角向右需要负向根节点镜像；`Fantazia Animated 2D Monsters` 怪物初始朝右，所以怪物向左也需要负向根节点镜像。演出层应使用根节点 `transform.localScale.x` 作为唯一镜像来源，并将可见 `SkeletonAnimation.Skeleton.ScaleX` 归一为正值，避免根节点与 Skeleton 同时负向导致双重翻转。
+- 朝向角色判定规则（P0）：敌我朝向解析必须使用显式角色身份（hero/enemy）判定，禁止通过 `GetComponentInParent<HeroSpineLocomotion>()` 等层级推断，以免将主角反转约定错误传播到敌方对象。
 
 ### 10.19 DemoBattleActorView 与 SpineAttackPlayer 协同
 - 系统设计说明：`DemoBattleActorView` 负责演出层攻击/死亡播放，`SpineAttackPlayer` 负责轨道化攻击覆盖，二者约定轨道分工避免冲突。
@@ -1197,6 +1209,142 @@
   - P2：自动化回归接入。
 - 技术实现建议：
   - 可运营回归失败时，发布流程必须阻断并触发修复流程。
+
+### 10.81 分支策略与集成节奏规范
+- 系统设计说明：多人协作采用“主干稳定 + 功能分支短生命周期”策略，减少长期分叉带来的集成风险。
+- 数据结构定义：
+  - `BranchPolicy`
+    - `branchType: string`
+    - `maxLifetimeDays: int`
+    - `mergeRequirement: string`
+- 接口/API 设计：
+  - 分支创建命名规范入口、合并前检查入口、冲突处理入口。
+- 实现优先级：
+  - P0：主干可随时发布。
+  - P1：功能分支及时回合。
+  - P2：自动化分支健康检查。
+- 技术实现建议：
+  - 功能分支超过生命周期阈值必须拆分或回合，避免“巨型合并”。
+
+### 10.82 代码评审门禁规范
+- 系统设计说明：核心链路改动必须经过评审门禁，重点关注行为回归、异常码完整性、存档兼容与性能影响。
+- 数据结构定义：
+  - `ReviewGate`
+    - `changeScope: string`
+    - `requiredReviewers: int`
+    - `mustHaveTests: bool`
+    - `riskLevel: string`
+- 接口/API 设计：
+  - 评审发起入口、门禁检查入口、阻断合并入口。
+- 实现优先级：
+  - P0：高风险改动强制双审。
+  - P1：中风险改动单审。
+  - P2：低风险抽检。
+- 技术实现建议：
+  - 涉及 `FarmManager/GatherManager/BattleCore/SaveIO` 的改动默认按高风险处理。
+
+### 10.83 提交消息与变更粒度规范
+- 系统设计说明：提交应保持单一目的，消息说明“为什么改”而非仅“改了什么”。
+- 数据结构定义：
+  - `CommitPolicy`
+    - `type: string`
+    - `scope: string`
+    - `reason: string`
+    - `linkedSpecSection: string`
+- 接口/API 设计：
+  - 提交格式校验入口、变更范围检查入口。
+- 实现优先级：
+  - P0：提交可追溯。
+  - P1：粒度合理。
+  - P2：自动化校验。
+- 技术实现建议：
+  - 单次提交跨多个核心模块时必须拆分为独立提交。
+
+### 10.84 SPEC 与实现同步规则
+- 系统设计说明：任何影响行为的实现变更必须先更新或同步更新 SPEC，避免文档失真。
+- 数据结构定义：
+  - `SpecSyncRecord`
+    - `changeId: string`
+    - `specSection: string`
+    - `codeModules: string[]`
+    - `syncStatus: string`
+- 接口/API 设计：
+  - SPEC 变更登记入口、实现映射入口、同步校验入口。
+- 实现优先级：
+  - P0：核心行为改动必同步。
+  - P1：辅助行为改动可批量同步。
+  - P2：自动映射建议。
+- 技术实现建议：
+  - PR 模板中增加“对应 SPEC 条目”必填字段。
+
+### 10.85 版本号与发布标识规范
+- 系统设计说明：版本号采用语义化规则并记录发布标识，确保问题定位可追溯到构建产物。
+- 数据结构定义：
+  - `ReleaseVersion`
+    - `major: int`
+    - `minor: int`
+    - `patch: int`
+    - `buildId: string`
+- 接口/API 设计：
+  - 版本生成入口、构建标识写入入口、版本查询入口。
+- 实现优先级：
+  - P0：发布包可定位。
+  - P1：版本比较可用。
+  - P2：自动递增策略。
+- 技术实现建议：
+  - 热修仅增加 patch，不混入功能性大改。
+
+### 10.86 合并冲突处理与回归规范
+- 系统设计说明：冲突解决后必须执行目标模块最小回归，防止“编译通过但行为漂移”。
+- 数据结构定义：
+  - `ConflictResolutionRecord`
+    - `files: string[]`
+    - `resolutionType: string`
+    - `postMergeTests: string[]`
+    - `riskNote: string`
+- 接口/API 设计：
+  - 冲突记录入口、回归执行入口、结果确认入口。
+- 实现优先级：
+  - P0：冲突后核心链路回归。
+  - P1：中风险模块回归。
+  - P2：自动化冲突检测建议。
+- 技术实现建议：
+  - 涉及存档结构或状态机代码的冲突，必须人工复审。
+
+### 10.87 朝向演出回归专项规范
+- 系统设计说明：针对 `FarmUnlockBattleFlowController`、`HeroSpineLocomotion`、`DemoBattleActorView` 的朝向仲裁建立专项回归，防止“背对敌人”回归。
+- 数据结构定义：
+  - `FacingRegressionCase`
+    - `roleType: string`
+    - `expectedFacing: string`
+    - `scaleXRuntime: float`
+    - `scaleXVisual: float`
+    - `skeletonPath: string`
+- 接口/API 设计：
+  - 进入战斗朝向锁定检查入口、流程结束恢复检查入口、异常快照输出入口。
+- 实现优先级：
+  - P0：敌我朝向正确。
+  - P1：战斗结束恢复正确。
+  - P2：多 Skeleton 节点自动诊断。
+- 技术实现建议：
+  - 朝向判定必须基于显式角色身份，不允许层级推断替代角色语义。
+
+### 10.88 跨模块责任边界清单
+- 系统设计说明：明确 Boot、Interaction、Farm/Gather、Battle、Save、Visual 的读写责任边界，减少隐式耦合。
+- 数据结构定义：
+  - `ModuleOwnership`
+    - `module: string`
+    - `ownsState: string[]`
+    - `readOnlyState: string[]`
+    - `forbiddenWrites: string[]`
+- 接口/API 设计：
+  - 边界规则登记入口、违规写入检测入口、审查辅助入口。
+- 实现优先级：
+  - P0：核心状态单写入口。
+  - P1：跨模块写入可检测。
+  - P2：自动规则检查。
+- 技术实现建议：
+  - 以“谁拥有状态，谁负责落盘”为原则设计接口，禁止旁路写入。
 
 ---
 
