@@ -112,6 +112,24 @@
 - 接口/API 设计：`PetManager.BindSaveData`、`PetWorkExecutor.TransportToPoint`、`PetCatalog`/`PetCatalogAsset`。
 - 实现优先级：P0 跟随与工作闭环；P1 宠物能力与任务匹配；P2 状态可视化调试。
 - 技术实现建议：宠物行为决策与表现层分离，避免动画状态直接驱动业务写档。
+- 喂养工作门禁（P0）：宠物进入 `Work` 必须先完成喂养动作；喂养条件为“主角在宠物交互半径内 + 主角背包 `berry >= 1` + 宠物当前非 `Work`”。
+- 喂养按钮样式（P1）：宠物头顶“喂养”按钮文字字号固定为 `45`，确保远景下可读性。
+- 工作时长规则（P0）：每次喂养成功后设置 `WorkingDurationSec = 180`，倒计时结束后强制回到 `Free`。
+- 自由巡游规则（P0）：宠物处于非工作状态时进入自由巡游，移动速度系数固定 `0.5`，仅可在“可走且无迷雾”区域随机取点巡游。
+- 非持久化约束（P0）：`workRemainingSec` 与自由巡游目标点均为运行时态，不写入存档；重进场景后宠物默认 `Free`。
+- 数据结构补充（P0）：
+  - `PetWorkRuntime { state: PetState, workRemainingSec: float, lastFeedTimeSec: float }`
+  - `PetFreeWanderRuntime { currentTarget: Vector3, repathCooldownSec: float }`
+- 接口/API 补充（P0）：
+  - `PetManager.TryFeedPet(petId, playerInventory)`：尝试消耗 `berry x1` 并开启 180 秒工作态。
+  - `PetManager.TickPetWork(dt)`：推进工作倒计时并在到时回退 `Free`。
+  - `PetFollowHero.TryPickFreeWanderTarget(nonFogWalkableArea)`：自由态随机目标点选择。
+- 工作态可观测性约束（P0，调试基线）：
+  - 喂养成功后必须可观测到 `State=Work` 且 `workRemainingSec>0` 的同帧成立。
+  - 喂养触发 `Work` 时必须同步初始化 `LastWorkType`（来源：上次有效工作类型或当前能力表兜底选择），禁止出现 `State=Work` 且 `LastWorkType=""` 的阻塞态。
+  - 工作初始化必须可观测到 `LastWorkType in {Farming,Gathering}` 或明确记录“无能力可分配”原因。
+  - `PetWorkExecutor.Update` 在 `State=Work` 时必须输出一次执行分支判定（Farming/Gathering/Transport/Blocked），用于判定“原地不动”是否因目标绑定失败、管理器缺失或工作类型缺失导致。
+  - 调试日志采用 NDJSON，字段最少包含：`sessionId/runId/hypothesisId/location/message/data/timestamp`。
 
 ### 10.4 导航系统（NavigationService + A*）
 - 系统设计说明：`NavigationService` 提供可走性判定与路径查询，底层由 `GridNavigationMap` 与 `GridAStarPathfinder` 支撑。
@@ -126,6 +144,7 @@
 - 接口/API 设计：各 Visual 组件的刷新入口与 Manager 查询接口。
 - 实现优先级：P0 状态变化实时可见；P1 低帧率稳定；P2 特效层次统一。
 - 技术实现建议：所有视觉刷新由事件或轮询快照驱动，避免直接修改运行时核心状态。
+- Carry 锚点布局基线（P0）：`HeroRoot/CarryAnchor` 的默认本地坐标基线为 `localPosition=(0, 7.35, 0)`；后续若调整携带堆叠高度或朝向镜像逻辑，必须先更新本条规格再改实现。
 
 ### 10.6 CameraFollow 与显示启动
 - 系统设计说明：`DisplayBootstrap` 负责显示基础配置；`CameraFollow` 绑定主角并平滑跟随，保证营地与战斗演出期间镜头一致。
@@ -182,6 +201,9 @@
 - 接口/API 设计：需求 Tick 入口、AI 决策入口、表现层状态更新入口。
 - 实现优先级：P0 需求推进稳定；P1 AI 状态切换平滑；P2 复杂行为扩展。
 - 技术实现建议：需求计算与行为表现分层，避免动画回调反向修改需求真值。
+- 工作门禁联动（P0）：`PetAI` 不得在常规 1s 巡检中主动进入 `Work`；`Work` 仅由喂养动作触发。
+- 倒计时退出规则（P0）：`PetAI`/`PetManager` 每 Tick 先推进 `workRemainingSec`，当 `workRemainingSec <= 0` 时无条件退出 `Work -> Free`。
+- 强制打断优先级（P1）：当 `Eat/Rest` 强制打断发生时清空 `workRemainingSec` 并回收当前工作目标，避免恢复后无门禁重入工作。
 
 ### 10.14 资源与材质兼容修复
 - 系统设计说明：`MaterialFallbackFixer` 提供材质缺失或渲染异常时的回退修复，降低资源不一致导致的运行时黑屏/粉材质风险。
@@ -192,10 +214,10 @@
 
 ### 10.15 采集点血条与状态可视化
 - 系统设计说明：`GatherHealthBar` 与 `GatherPointVisual` 已形成采集点状态可视化链路，依据运行时状态展示血量和冷却反馈。
-- 数据结构定义：血量比例、冷却比例、显示缓存状态。
-- 接口/API 设计：视觉刷新入口、Manager 状态查询接口、组件绑定入口。
-- 实现优先级：P0 视觉与状态一致；P1 低性能设备稳定；P2 样式主题扩展。
-- 技术实现建议：血条更新频率做节流处理，避免高频刷新带来 GC 抖动。
+- 数据结构定义：血量比例、冷却比例、显示缓存状态；新增 `isCollectedHidden: bool`（采集后到重生完成前保持隐藏）与 `isRespawnReady: bool`（冷却完成可重新显示）。
+- 接口/API 设计：视觉刷新入口、Manager 状态查询接口、组件绑定入口；新增 `SetCollectedHidden(pointId, hidden)` 用于统一切换采集物可见性。
+- 实现优先级：P0 视觉与状态一致（`berry/stone/wood` 在 CD 中保持不可见）；P1 低性能设备稳定；P2 样式主题扩展。
+- 技术实现建议：血条更新频率做节流处理，避免高频刷新带来 GC 抖动；采集成功瞬间必须先执行隐藏，再启动冷却倒计时，杜绝“CD 中短暂闪现”。
 
 ### 10.16 CampUpgradeFlow 升级流程
 - 系统设计说明：`CampUpgradeFlow` 负责升级入口、条件检查、提交升级与持久化回写，并联动迷雾显示更新。
@@ -203,6 +225,11 @@
 - 接口/API 设计：`TryCommitUpgrade`、升级可行性检查接口、升级后通知接口。
 - 实现优先级：P0 升级提交正确写档；P1 升级失败反馈明确；P2 升级动画与音效扩展。
 - 技术实现建议：升级扣减与等级提升保持原子性，失败必须回滚到提交前状态。
+- 地图入场可见性诊断（P0）：出现“进入地图后 Campfire 不可见/升级按钮不显示”时，必须先记录运行时证据：`GameBootstrap.IsStartupFlowComplete`、`RuntimeSave.campUpgradeCount`、`FarmUnlockBattleFlowController.IsAnyFlowActive`、`map` 根节点激活状态、`Campfire1-1`/`Campfire2-1` 的存在与激活状态、当前升级视觉档位、Hero 与当前篝火距离、按钮投影坐标与相机解析结果。
+- 数据结构定义：诊断日志按 `sessionId`、`runId`、`hypothesisId`、`location`、`message`、`data`、`timestamp` 写入 NDJSON；`data` 至少包含 `campUpgradeCount`、`campfire1`、`campfire2`、`mapRoot`、`hero`、`camera`、`distanceToCampfire`、`isHeroNear`。
+- 接口/API 设计：仅在 `CampUpgradeFlow.OnGUI` 与升级视觉切换点输出折叠调试日志，不改变 `TryCommitUpgrade` 的业务提交接口；后续修复必须以日志确认的根因为依据。
+- 实现优先级：P0 先区分“对象被隐藏/不存在”和“UI 条件未满足”；P1 再验证迷雾 overlay 与升级档位联动；P2 补充编辑器预检。
+- 技术实现建议：调试期间日志必须节流，禁止记录任何账号、路径外凭据或个人信息；问题确认前不得加入兼容性兜底或猜测性修复。
 
 ### 10.17 ShopFogOverlay 中心锚点与模式
 - 系统设计说明：`ShopFogOverlay` 按 `worldCenterMode` 决定迷雾中心来源，可结合 `FarmManager` 锚点解析实现动态对齐。
@@ -210,6 +237,8 @@
 - 接口/API 设计：`BindFarmManager`、`ApplyCampUpgradeLevel`、中心点解析与刷新接口。
 - 实现优先级：P0 中心点正确解析；P1 升级联动无延迟；P2 多区域迷雾扩展。
 - 技术实现建议：中心点解析失败要有确定回退，不可出现 NaN 或屏外异常采样。
+- 调试诊断约束（P1）：出现“迷雾无法启动/不显示”时，必须先记录运行时证据（绑定结果、渲染相机解析、中心点有效性、`TryGetFogRenderParams` 返回值与关键参数），在证据确认根因前不得直接改动业务逻辑。
+- 生命周期一致性规则（P0）：场景中存在多个 `ShopFogOverlay` 时，若当前静态活跃实例在运行时被禁用（如篝火阶段切换导致旧对象 `SetActive(false)`），系统必须立即切换到另一个仍处于 `activeInHierarchy && isActiveAndEnabled` 的 overlay；禁止保留空静态引用导致渲染帧 `ResolveForRendering` 失败。
 
 ### 10.18 FarmUnlockBattleFlowController 状态机
 - 系统设计说明：解锁战流程由 `FarmUnlockBattleFlowController` 驱动，包含对话、冒险剧情、开战、结算、失败回落与场景恢复。新游戏入口必须先展示“冒险剧情”，再由玩家点击按钮进入原本的脚本开局战斗。
@@ -235,9 +264,13 @@
 ### 10.20 VirtualJoystick 与 KeyboardInputSource 双端输入
 - 系统设计说明：项目已实现键盘与虚拟摇杆双输入源，均通过 `ICampInputSource` 接入并由优先级仲裁。
 - 数据结构定义：摇杆按压状态、拖拽向量、归一化意图、键盘轴向输入。
-- 接口/API 设计：`ReadIntent`、注册与反注册接口、输入优先级字段。
-- 实现优先级：P0 输入切换平稳；P1 死区与抖动控制；P2 手柄输入接入。
-- 技术实现建议：保持统一 deadzone 语义，减少设备差异导致的移动体验不一致。
+- 接口/API 设计：`ReadIntent`、注册与反注册接口、输入优先级字段；新增运行期门控 `CanUseVirtualJoystick()`（或等效实现）以统一判定摇杆是否允许显示与输出意图。
+- 实现优先级：P0 输入切换平稳与“启动默认隐藏”；P1 死区与抖动控制；P2 手柄输入接入。
+- 技术实现建议：
+  - 启动后在“存档选择/剧情演出/开局战斗”等不可操控阶段，虚拟摇杆必须保持隐藏且 `ReadIntent` 返回零向量；
+  - 进入可操控地图阶段后，摇杆再按触控行为显示；
+  - 可见性控制应覆盖摇杆根节点下全部 `Graphic`，避免只隐藏背景/手柄导致残留 UI 可见；
+  - 保持统一 deadzone 语义，减少设备差异导致的移动体验不一致。
 
 ### 10.21 SaveIO 持久化策略与故障降级
 - 系统设计说明：`SaveIO` 承担 JSON 存档读写；加载失败时可降级为新存档，避免阻塞启动主流程。
@@ -263,9 +296,9 @@
 ### 10.24 WorldDropItem 交互与回收
 - 系统设计说明：`WorldDropItem` 承接世界掉落显示与拾取行为，作为 Farm/Gather 溢出物的统一场景对象。
 - 数据结构定义：掉落物 ID、数量、来源标识、当前位置、拾取状态。
-- 接口/API 设计：初始化入口、拾取回调、与 `FarmManager/GatherManager` 对接接口。
+- 接口/API 设计：初始化入口、拾取回调、与 `FarmManager/GatherManager` 对接接口；新增 `TryCollectNearbyWorldDrops(actor, bag, actorPos, radius)` 作为角色自动拾取入口。
 - 实现优先级：P0 掉落可见可拾取；P1 回收与入包一致；P2 吸附拾取优化。
-- 技术实现建议：掉落回收后应立即更新存档映射，防止场景重建时重复生成。
+- 技术实现建议：掉落回收后应立即更新存档映射，防止场景重建时重复生成；当角色拾取成功入包时，必须同 tick 同步移除场景图标与 `SaveData.worldDrops` 对应条目，且当前版本采用整堆拾取（`PeekTryAddOverflow == 0`）避免部分拾取导致的场景/存档不一致。
 
 ### 10.25 BattleSceneAdapter 战斗桥接
 - 系统设计说明：`BattleSceneAdapter` 连接营地上下文与 `BattleCore`，负责开战参数整理、逐步推进、自动结算与结果写回。
@@ -411,6 +444,8 @@
 - 技术实现建议：
   - 为状态切换增加最小时长阈值，避免帧间抖动。
   - 需求推进与执行层写档分离，防止循环依赖。
+  - 喂养门禁下的工作状态切换需通过单一入口 `TryFeedPet`，禁止在 AI 分支直接写 `State=Work`。
+  - 自由巡游目标点选择必须同时满足 `NavigationService.IsWorldWalkable` 与迷雾区域约束，避免“可见但不可达”与“进入迷雾区”。
 
 ### 10.37 MaterialFallbackFixer 渲染降级规范
 - 系统设计说明：`MaterialFallbackFixer` 用于修复材质丢失、Shader 不兼容导致的不可见渲染问题，保障核心对象可视化。
@@ -586,15 +621,22 @@
     - `cooldownBefore: float`
     - `cooldownAfter: float`
     - `tickDt: float`
+  - `GatherVisibilityTrace`
+    - `pointId: string`
+    - `resourceType: string` // berry/stone/wood
+    - `hiddenDuringCooldown: bool`
+    - `visibleAfterRespawn: bool`
 - 接口/API 设计：
   - `ApplyAttack(...)`：返回采集结果码。
-  - 冷却 Tick 入口：返回状态变化摘要。
+  - 冷却 Tick 入口：返回状态变化摘要，并在 `cooldownAfter <= 0` 时触发重生可见化。
+  - 可见性入口：`SyncGatherVisibility(pointId)`，按状态机统一应用隐藏/显示，避免散落在多个脚本中直接 `SetActive`。
 - 实现优先级：
-  - P0：冷却逻辑正确。
+  - P0：冷却逻辑正确且 CD 期间保持隐藏。
   - P1：状态切换可审计。
   - P2：采集效率统计。
 - 技术实现建议：
   - 对“冷却中重复攻击”使用节流日志，避免海量重复输出。
+  - 可见性状态机必须遵循：`Alive(可见) -> CollectedCooldown(隐藏) -> RespawnReady(可见)`；禁止在 `CollectedCooldown` 期间提前显示模型。
 
 ### 10.46 SaveIO 错误分级与恢复策略
 - 系统设计说明：`SaveIO` 错误需按“可恢复/需重试/不可恢复”分级，避免统一吞错导致数据风险。
@@ -634,6 +676,28 @@
   - P2：自动告警接入。
 - 技术实现建议：
   - 先从关键路径最小指标开始，逐步扩展，避免一次性埋点过重。
+
+### 10.48 C# 调试日志字符串编译安全规范
+- 系统设计说明：对宠物系统调试日志采用“表达式与 JSON 文本分离”的构造规则，避免在插值表达式中使用错误转义导致编译失败。
+- 数据结构定义：
+  - `PetDebugPayload`
+    - `petId: string`
+    - `state: string`
+    - `workRemainingSec: string` // 使用 InvariantCulture 格式化后字符串
+    - `lastWorkType: string`
+    - `workAbilityCount: int`
+    - `bagBerryAfter: int`
+- 接口/API 设计：
+  - `EmitDebugLog(hypothesisId, location, message, payloadJson)` 的 `payloadJson` 必须来源于合法 C# 表达式拼接或序列化结果。
+  - 数值格式化接口统一使用 `ToString("0.000", CultureInfo.InvariantCulture)`，禁止在插值表达式中写 `\"` 形式的伪转义。
+- 实现优先级：
+  - P0：确保 `PetManager` 相关日志语句可编译。
+  - P1：统一宠物子系统日志格式化规范。
+  - P2：后续替换为结构化序列化以降低手写 JSON 风险。
+- 技术实现建议：
+  - 插值字符串仅在文本层使用转义；表达式层按标准 C# 语法书写。
+  - 对复杂 payload，优先抽取局部变量后再写入日志，减少括号与引号嵌套。
+  - 临时调试埋点遵循生命周期：`加埋点 -> 复现采样 -> 修复验证 -> 清理埋点`；确认问题已修复后必须移除临时代码，避免污染正式逻辑。
 
 ### 10.48 CampSim Tick 性能预算
 - 系统设计说明：`CampSimClock` 每次 Tick 驱动多个子系统，需定义单帧预算避免逻辑峰值导致卡顿。
@@ -1545,3 +1609,29 @@ SectionReplacePlan
 - 已移除运行时会话埋点策略，恢复为无日志输出的修复脚本执行路径。
 - 保留边界替换、污染守卫、源块健康检查、备份写入四项长期安全机制。
 - 已清理 `fix_spec_encoding.ps1` 中未使用变量，满足 PSScriptAnalyzer `PSUseDeclaredVarsMoreThanAssignments` 规则，避免噪声告警干扰后续维护。
+
+## 7. PetAI 编译稳定性补充规范（2026-04-27）
+
+- 系统设计说明：`PetAI` 的调试日志允许在 Tick 关键路径记录状态快照，但必须保证插值字符串中的表达式是合法 C# 代码，避免引号与花括号混用导致编译失败。
+- 数据结构定义：
+  - `PetAIDebugTrace`
+    - `sessionId: string`
+    - `runId: string`
+    - `hypothesisId: string`
+    - `location: string`
+    - `message: string`
+    - `data: object`
+    - `timestamp: long`
+- 接口/API 设计：
+  - `EmitDebugLog(hypothesisId, location, message, dataJson)`：统一写入 NDJSON。
+  - 规范：插值表达式内部（`{ ... }`）若调用 `ToString`，应写作 `ToString("0.000", InvariantCulture)`；禁止使用文本转义片段 `\"0.000\"`。
+- 实现优先级：
+  - P0：编译通过（零语法错误）。
+  - P1：日志结构可解析（字段完整、格式稳定）。
+  - P2：日志开销可控（仅关键分支记录）。
+- 技术实现建议：
+  - 复杂插值表达式优先提取局部变量，减少括号嵌套错误概率。
+  - 统一使用 `Escape` 处理动态字符串字段，防止 JSON 结构破坏。
+  - 调试日志会话信息（`sessionId/runId`）必须与当前调试会话一致。
+- 文档同步：
+  - 2026-04-27 已完成本轮 `PetAI` 调试 instrumentation 清理：移除 `#region agent log` 埋点调用与 `EmitDebugLog`/`Escape` 辅助方法，恢复为无会话日志输出实现。

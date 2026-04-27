@@ -1695,6 +1695,11 @@ GatherPointRuntime:
 - `GatherPointComponent`??? `Interactable`?? ?2.4-6??`MonoBehaviour`?**?????**?`gatherConfig: GatherConfig`?`pointId: string`????? `Kind = GatherPoint`?`GetAnchorPosition() => transform.position`?`InteractionRadius` ? `InteractionPriority` ? `gatherConfig` ??????????????????????????????
 - **????**?`Awake/OnEnable` ?? `GatherManager` ?????? `pointId`??`OnDestroy/OnDisable` ?????? `pointId` ??????????????
 - **?????**?`GatherPointComponent` ????? `GatherPointRuntime` ??????? `GatherManager` ? `pointId` ?????????
+- **Ground-drop pickup consistency (v1.41)**:
+  - When the hero picks a `WorldDropItem` and the stack is accepted into `SaveData.inventory`, the ground icon must be removed in the same frame tick.
+  - `FarmManager` owns source-of-truth cleanup: remove matching `SaveData.worldDrops` entry and destroy the corresponding `WorldDropItem` scene object together.
+  - Add API `TryCollectNearbyWorldDrops(actor, bag, actorPos, radius)` for resolver tick usage; return collected stack count for debug/telemetry.
+  - Pickup behavior in this version is all-or-nothing per drop stack (`PeekTryAddOverflow == 0` required), to avoid partial pickup ambiguity between scene object and save entry.
 
 ---
 
